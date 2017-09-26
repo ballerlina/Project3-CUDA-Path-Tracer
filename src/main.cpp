@@ -2,6 +2,9 @@
 #include "preview.h"
 #include <cstring>
 
+const bool CONTIGUOUS_MATERIAL = 1;
+const bool CACHE_FIRST_INTERSECTION = 0;
+
 static std::string startTimeString;
 
 // For camera controls
@@ -134,7 +137,7 @@ void runCuda() {
 
         // execute the kernel
         int frame = 0;
-        pathtrace(pbo_dptr, frame, iteration);
+        pathtrace(pbo_dptr, frame, iteration, CONTIGUOUS_MATERIAL, CACHE_FIRST_INTERSECTION);
 
         // unmap buffer object
         cudaGLUnmapBufferObject(pbo);

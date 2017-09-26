@@ -15,7 +15,6 @@ enum GeomType {
 struct Ray {
     glm::vec3 origin;
     glm::vec3 direction;
-	glm::vec3 intersect;
 };
 
 struct Geom {
@@ -74,4 +73,5 @@ struct ShadeableIntersection {
   float t;
   glm::vec3 surfaceNormal;
   int materialId;
+  glm::vec3 point;
 };

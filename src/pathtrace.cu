@@ -75,7 +75,8 @@ static Material * dev_materials = NULL;
 static PathSegment * dev_paths = NULL;
 static ShadeableIntersection * dev_intersections = NULL;
 // TODO: static variables for device memory, any extra info you need, etc
-// ...
+thrust::device_ptr<PathSegment> dev_thrust_paths;
+thrust::device_ptr<ShadeableIntersection> dev_thrust_intersections;
 
 void pathtraceInit(Scene *scene) {
 	hst_scene = scene;
@@ -97,6 +98,9 @@ void pathtraceInit(Scene *scene) {
 	cudaMemset(dev_intersections, 0, pixelcount * sizeof(ShadeableIntersection));
 
 	// TODO: initialize any extra device memeory you need
+
+	dev_thrust_paths = thrust::device_pointer_cast(dev_paths);
+	dev_thrust_intersections = thrust::device_pointer_cast(dev_intersections);
 
 	checkCUDAError("pathtraceInit");
 }
@@ -196,7 +200,6 @@ __global__ void computeIntersections(
 				hit_geom_index = i;
 				intersect_point = tmp_intersect;
 				normal = tmp_normal;
-				pathSegment.ray.intersect = intersect_point;
 			}
 		}
 
@@ -210,6 +213,7 @@ __global__ void computeIntersections(
 			intersections[path_index].t = t_min;
 			intersections[path_index].materialId = geoms[hit_geom_index].materialid;
 			intersections[path_index].surfaceNormal = normal;
+			intersections[path_index].point = intersect_point;
 		}
 	}
 }
@@ -235,11 +239,6 @@ __global__ void shadeFakeMaterial(
 	int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx < num_paths)
 	{
-		if (pathSegments[idx].remainingBounces == 0)
-		{
-			return;
-		}
-
 		ShadeableIntersection intersection = shadeableIntersections[idx];
 		if (intersection.t > 0.0f) { // if the intersection exists...
 		  // Set up the RNG
@@ -263,10 +262,9 @@ __global__ void shadeFakeMaterial(
 				//float lightTerm = glm::dot(intersection.surfaceNormal, glm::vec3(0.0f, 1.0f, 0.0f));
 				//pathSegments[idx].color *= (materialColor * lightTerm) * 0.3f + ((1.0f - intersection.t * 0.02f) * materialColor) * 0.7f;
 				//pathSegments[idx].color *= u01(rng); // apply some noise because why not
-				scatterRay(pathSegments[idx], pathSegments[idx].ray.origin + pathSegments[idx].ray.direction * intersection.t, intersection.surfaceNormal, material, rng);
-				pathSegments[idx].remainingBounces--;
+				scatterRay(pathSegments[idx], intersection.point, intersection.surfaceNormal, material, rng);
 
-				if (pathSegments[idx].remainingBounces == 0)
+				if (--pathSegments[idx].remainingBounces == 0)
 				{
 					pathSegments[idx].color = glm::vec3(0.0f);
 				}
@@ -304,11 +302,16 @@ struct isActive
 	}
 };
 
+__host__ __device__ bool operator<(const ShadeableIntersection &lhs, const ShadeableIntersection &rhs)
+{
+	return lhs.materialId < rhs.materialId;
+}
+
 /**
  * Wrapper for the __global__ call that sets up the kernel calls and does a ton
  * of memory management
  */
-void pathtrace(uchar4 *pbo, int frame, int iter) {
+void pathtrace(uchar4 *pbo, int frame, int iter, bool contiguousMaterial, bool cacheFirstIntersections) {
 	const int traceDepth = hst_scene->state.traceDepth;
 	const Camera &cam = hst_scene->state.camera;
 	const int pixelcount = cam.resolution.x * cam.resolution.y;
@@ -359,7 +362,6 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 	int depth = 0;
 	PathSegment* dev_path_end = dev_paths + pixelcount;
 	int num_paths = dev_path_end - dev_paths;
-	thrust::device_ptr<PathSegment> dev_thrust_paths(dev_paths);
 
 	// --- PathSegment Tracing Stage ---
 	// Shoot ray into scene, bounce between objects, push shading chunks
@@ -384,6 +386,11 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 		cudaDeviceSynchronize();
 		depth++;
 
+		if (contiguousMaterial)
+		{
+			thrust::sort_by_key(dev_thrust_intersections, dev_thrust_intersections + pixelcount, dev_thrust_paths);
+		}
+
 
 		// TODO:
 		// --- Shading Stage ---
@@ -404,8 +411,7 @@ void pathtrace(uchar4 *pbo, int frame, int iter) {
 			);
 
 		// TODO: Stream compaction
-		thrust::device_ptr<PathSegment> part = thrust::partition(dev_thrust_paths, dev_thrust_paths + pixelcount, isActive());
-		num_paths = part - dev_thrust_paths;
+		num_paths = thrust::partition(dev_thrust_paths, dev_thrust_paths + pixelcount, isActive()) - dev_thrust_paths;
 
 		if (num_paths == 0)
 		//if (depth == traceDepth)
