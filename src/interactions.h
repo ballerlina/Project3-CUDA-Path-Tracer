@@ -82,7 +82,6 @@ void scatterRay(
 	pathSegment.ray.origin = intersect + diffuseDirection * EPSILON;
 	pathSegment.ray.direction = glm::normalize(diffuseDirection);
 
-	float attenuation = glm::dot(glm::normalize(normal), glm::normalize(diffuseDirection));
-	pathSegment.color *= m.color * attenuation;
-	//printf("%f %f %f\n", m.color.x, m.color.y, m.color.z);
+	//float attenuation = glm::dot(normal, diffuseDirection);
+	pathSegment.color *= m.color;
 }
